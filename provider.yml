@@ -1,0 +1,138 @@
+---
+# Playbook para configurar o servidor WordPress
+- hosts: wordpress
+  handlers:
+    - name: Restart Apache service
+      service: 
+        name: apache2
+        state: restarted
+      become: yes  # Executa a tarefa com privilégios de superusuário
+
+  tasks: 
+    - name: Install dependencies for WordPress
+      ansible.builtin.apt:
+        pkg:
+          - apache2 
+          - ghostscript 
+          - libapache2-mod-php 
+          - php 
+          - php-bcmath 
+          - php-curl 
+          - php-imagick 
+          - php-intl 
+          - php-json 
+          - php-mbstring 
+          - php-mysql 
+          - php-xml 
+          - php-zip
+        state: latest  # Garante que as versões mais recentes dos pacotes sejam instaladas
+        update_cache: yes  # Atualiza o cache do apt antes de instalar os pacotes
+      become: yes
+
+    - name: Create directory for WordPress
+      ansible.builtin.file:
+        path: /srv/www  # Caminho do diretório a ser criado
+        state: directory  # Define que o estado do caminho deve ser um diretório
+        owner: www-data  # Define o proprietário do diretório
+        group: www-data  # Define o grupo do diretório
+      become: yes
+
+    - name: Download and extract WordPress
+      ansible.builtin.unarchive:
+        src: https://wordpress.org/latest.tar.gz  # URL do arquivo WordPress a ser baixado
+        dest: /srv/www  # Caminho onde o WordPress será extraído
+        remote_src: yes  # Indica que o arquivo de origem está em um local remoto
+      become: yes
+
+    - name: Copy Apache config file for WordPress
+      ansible.builtin.copy:
+        src: files/wordpress.conf  # Caminho local do arquivo de configuração do Apache
+        dest: /etc/apache2/sites-available/000-default.conf  # Caminho de destino no servidor
+      become: yes
+      notify:
+        - Restart Apache service  # Notifica o handler para reiniciar o Apache após a cópia
+
+    - name: Copy wp-config-sample.php to wp-config.php
+      ansible.builtin.copy:
+        src: /srv/www/wordpress/wp-config-sample.php  # Arquivo de configuração de amostra
+        dest: /srv/www/wordpress/wp-config.php  # Caminho de destino para a cópia do arquivo
+        force: no  # Não sobrescreve se o arquivo já existir
+        remote_src: yes
+      become: yes
+
+    - name: Configure wp-config.php with database credentials
+      ansible.builtin.replace:
+        path: /srv/www/wordpress/wp-config.php
+        regexp: '{{ item.regexp }}'  # Expressão regular para encontrar o texto a ser substituído
+        replace: '{{ item.replace }}'  # Texto que substitui o valor encontrado
+      with_items:
+        - { regexp: 'database_name_here', replace: '{{ db_name }}' }
+        - { regexp: 'username_here', replace: '{{ db_user }}' }
+        - { regexp: 'password_here', replace: '{{ db_password }}' }
+        - { regexp: 'localhost', replace: '{{ db_host }}' }
+      become: yes
+
+    - name: Replace salts in wp-config.php
+      ansible.builtin.lineinfile:
+        path: /srv/www/wordpress/wp-config.php
+        search_string: '{{ item.search_string }}'  # Busca pela string original no arquivo
+        line: '{{ item.line }}'  # Substitui a linha completa com a nova string
+      with_items:
+        - { search_string: "define( 'AUTH_KEY',         'put your unique phrase here' );", line: "define( 'AUTH_KEY',         '{{ auth_key }}' );" }
+        - { search_string: "define( 'SECURE_AUTH_KEY',  'put your unique phrase here' );", line: "define( 'SECURE_AUTH_KEY',  '{{ secure_auth_key }}' );" }
+        - { search_string: "define( 'LOGGED_IN_KEY',    'put your unique phrase here' );", line: "define( 'LOGGED_IN_KEY',    '{{ logged_in_key }}' );" }
+        - { search_string: "define( 'NONCE_KEY',        'put your unique phrase here' );", line: "define( 'NONCE_KEY',        '{{ nonce_key }}' );" }
+        - { search_string: "define( 'AUTH_SALT',        'put your unique phrase here' );", line: "define( 'AUTH_SALT',        '{{ auth_salt }}' );" }
+        - { search_string: "define( 'SECURE_AUTH_SALT', 'put your unique phrase here' );", line: "define( 'SECURE_AUTH_SALT', '{{ secure_auth_salt }}' );" }
+        - { search_string: "define( 'LOGGED_IN_SALT',   'put your unique phrase here' );", line: "define( 'LOGGED_IN_SALT',   '{{ logged_in_salt }}' );" }
+        - { search_string: "define( 'NONCE_SALT',       'put your unique phrase here' );", line: "define( 'NONCE_SALT',       '{{ nonce_salt }}' );" }
+      become: yes
+
+# Playbook para configurar o servidor MySQL
+- hosts: mysql
+  handlers:
+    - name: Restart MySQL service
+      service: 
+        name: mysql
+        state: restarted
+      become: yes  # Executa a tarefa com privilégios de superusuário
+
+  tasks: 
+    - name: Install dependencies for MySQL
+      ansible.builtin.apt:
+        pkg:
+          - mysql-server 
+          - python3-pymysql
+        state: latest  # Garante que as versões mais recentes dos pacotes sejam instaladas
+        update_cache: yes  # Atualiza o cache do apt antes de instalar os pacotes
+      become: yes
+
+    - name: Create a new MySQL database
+      community.mysql.mysql_db:
+        name: '{{ db_name }}'  # Nome do banco de dados a ser criado
+        state: present  # Garante que o banco de dados esteja presente
+        login_unix_socket: /run/mysqld/mysqld.sock
+      become: yes
+
+    - name: Create a new MySQL user
+      community.mysql.mysql_user:
+        name: '{{ db_user }}'  # Nome do usuário MySQL a ser criado
+        password: '{{ db_password }}'  # Senha do usuário MySQL
+        priv: '{{ db_name }}.*:SELECT,INSERT,UPDATE,DELETE,CREATE,DROP,ALTER'  # Privilégios do usuário no banco de dados
+        state: present  # Garante que o usuário esteja presente
+        login_unix_socket: /run/mysqld/mysqld.sock
+        host: '{{ item }}'  # Define de onde o usuário pode se conectar ao MySQL
+      with_items:
+        - 'localhost'
+        - '127.0.0.1'
+        - '{{ wordpress_host }}'  # IP do servidor WordPress
+      become: yes
+
+    - name: Configure MySQL to listen on all interfaces
+      ansible.builtin.replace:
+        path: /etc/mysql/mysql.conf.d/mysqld.cnf
+        regexp: '127.0.0.1'  # Busca pela linha de configuração original
+        replace: '0.0.0.0'  # Substitui para permitir conexões em todas as interfaces
+      become: yes
+      notify: 
+        - Restart MySQL service  # Notifica o handler para reiniciar o MySQL após a configuração

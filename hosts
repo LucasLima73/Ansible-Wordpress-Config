@@ -1,0 +1,9 @@
+# Definição do grupo de servidores 'wordpress'
+[wordpress]
+# Substitua 'IP_DO_SERVIDOR_WORDPRESS' pelo IP do servidor que hospeda o WordPress
+IP_DO_SERVIDOR_WORDPRESS ansible_user={{ wordpress_user }} ansible_ssh_private_key_file={{ wordpress_ssh_key }}
+
+# Definição do grupo de servidores 'mysql'
+[mysql]
+# Substitua 'IP_DO_SERVIDOR_MYSQL' pelo IP do servidor que hospeda o MySQL
+IP_DO_SERVIDOR_MYSQL ansible_user={{ mysql_user }} ansible_ssh_private_key_file={{ mysql_ssh_key }}
